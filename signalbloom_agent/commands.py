@@ -85,22 +85,27 @@ class CommandPoller:
         """Results not reported yet."""
         return sum(1 for c in self._commands.values() if c["state"] == REPORTING)
 
-    def poll(self, devices: list[dict]) -> None:
+    def poll(self, devices: list[dict]) -> int:
         """Report waiting results, then fetch and run new commands.
 
+        Returns how many fixes ran and succeeded this cycle.
         Raises AuthError on 401/403. Everything else is logged.
         """
+        succeeded = 0
         try:
             self._report_waiting()
             # The cloud marks commands as sent once listed, so every one is
             # run and saved before any reporting that could stop the cycle.
             for command in self._fetch():
-                self._handle(command, devices)
+                result = self._handle(command, devices)
+                if result is not None and result["status"] == "succeeded":
+                    succeeded += 1
             self._report_waiting()
         except _Unreachable:
             waiting = self.waiting
             note = f", {waiting} fix result{'s' if waiting != 1 else ''} waiting" if waiting else ""
             log.info(f"cloud unreachable while checking for fixes{note}")
+        return succeeded
 
     # Fetch and run
 
@@ -119,14 +124,15 @@ class CommandPoller:
             return []
         return commands
 
-    def _handle(self, command, devices: list[dict]) -> None:
+    def _handle(self, command, devices: list[dict]) -> dict | None:
+        """Run one command. Returns its result, or None if it was skipped."""
         if not isinstance(command, dict) or not isinstance(command.get("id"), str):
             log.info("skipped a fix with no id")
-            return
+            return None
         command_id = command["id"]
         if command_id in self._commands:
             log.info(f"already handled {command_id}, skipping")
-            return
+            return None
 
         # Saved before the fix starts, so a crash can't lead to a second run.
         self._commands[command_id] = {"state": RUNNING}
@@ -134,6 +140,7 @@ class CommandPoller:
         result = self._run_fix(command_id, command, devices)
         self._commands[command_id] = {"state": REPORTING, "result": result}
         self._save()
+        return result
 
     def _run_fix(self, command_id: str, command: dict, devices: list[dict]) -> dict:
         """Run one simulated fix. Never runs anything for a type not in ALLOWED."""

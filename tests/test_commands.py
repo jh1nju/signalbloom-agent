@@ -305,3 +305,16 @@ def test_400_result_is_dropped_and_saved_to_rejected(make, tmp_path):
     record = json.loads(line)
     assert record["command_id"] == "cmd_51d0" and record["status"] == 400
     assert record["result"]["status"] == "succeeded"
+
+
+def test_poll_counts_fixes_that_succeeded(make):
+    cloud = Cloud([command("cmd_1"), command("cmd_2", kind="wipe_disk"),
+                   command("cmd_3", mac="aa:bb:cc:dd:ee:01")], [command("cmd_1")])
+    poller = make(cloud)
+    assert poller.poll(DEVICES) == 2  # cmd_2 refused
+    assert poller.poll(DEVICES) == 0  # cmd_1 again: skipped, not re-run
+
+
+def test_poll_still_counts_successes_when_reporting_fails(make):
+    cloud = Cloud([command()], result_replies=[requests.ConnectionError()])
+    assert make(cloud).poll(DEVICES) == 1

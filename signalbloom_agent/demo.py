@@ -46,3 +46,20 @@ class DemoFault:
         if not now:
             return reading
         return apply_fault(reading, self._latency_ms, self._loss_pct)
+
+    def clear_by_fix(self) -> None:
+        """An approved fix succeeded: if the fault is on, turn it off.
+
+        Deletes the demo_fault file and ignores --demo-fault for the rest of
+        the run. Logs "DEMO FAULT OFF: cleared by approved fix". Does nothing
+        when the fault is already off.
+        """
+        if not self.active():
+            return
+        self._flag = False
+        try:
+            self._file.unlink(missing_ok=True)
+        except OSError as e:
+            log.warning("could not delete %s: %s", self._file, e)
+        self._was_active = False
+        log.info("DEMO FAULT OFF: cleared by approved fix")

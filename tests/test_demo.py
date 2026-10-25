@@ -146,3 +146,70 @@ def test_demo_amounts_default_when_missing_and_zero_kept(tmp_path):
 def test_bad_demo_amounts_rejected(tmp_path, changes, expected):
     with pytest.raises(ConfigError, match=expected):
         load_config(write_config(tmp_path, **changes))
+
+
+# --- cleared by an approved fix ---------------------------------------------
+
+def test_fix_clears_file_started_fault(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="signalbloom_agent")
+    (tmp_path / DEMO_FAULT_FILE).touch()
+    demo = DemoFault(False, tmp_path, 300, 20)
+    assert demo.process(reading())["latency_ms"] == 312.4
+
+    demo.clear_by_fix()
+    assert not (tmp_path / DEMO_FAULT_FILE).exists()
+    assert caplog.text.count("DEMO FAULT OFF: cleared by approved fix") == 1
+    assert demo.process(reading()) == reading()
+    assert caplog.text.count("DEMO FAULT OFF") == 1  # no second OFF line next cycle
+
+
+def test_fix_clears_flag_started_fault_for_rest_of_run(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="signalbloom_agent")
+    demo = DemoFault(True, tmp_path, 300, 20)
+    assert demo.process(reading())["latency_ms"] == 312.4
+
+    demo.clear_by_fix()
+    assert "DEMO FAULT OFF: cleared by approved fix" in caplog.text
+    for _ in range(3):
+        assert demo.process(reading()) == reading()
+    assert not demo.active()
+
+
+def test_fix_does_nothing_when_fault_is_off(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="signalbloom_agent")
+    demo = DemoFault(False, tmp_path, 300, 20)
+    demo.process(reading())
+    demo.clear_by_fix()
+    assert "DEMO FAULT" not in caplog.text
+
+
+def test_run_clears_fault_after_a_successful_fix(tmp_path):
+    clock = FakeClock()
+    stop = threading.Event()
+    buffer = ReadingBuffer(tmp_path, 100)
+    sender = RecordingSender(buffer)
+    sender.clock = clock
+    (tmp_path / DEMO_FAULT_FILE).touch()
+    calls = []
+
+    def measure():
+        calls.append(1)
+        if len(calls) == 3:
+            stop.set()
+        r = reading()
+        r.pop("download_mbps")
+        return r
+
+    class OneFixPoller(FakePoller):
+        def poll(self, devices):
+            super().poll(devices)
+            return 1 if len(self.polls) == 2 else 0  # fix succeeds on cycle 2
+
+    bandwidth = type("B", (), {"running": False, "take_result": lambda self: None,
+                               "start_if_due": lambda self: False})()
+    run(make_config(tmp_path), stop=stop, clock=clock, sleep=clock.sleep, measure=measure,
+        buffer=buffer, sender=sender, devices=FakeDevices(), bandwidth=bandwidth,
+        poller=OneFixPoller(), demo_fault=True)
+
+    assert [f[1][0]["latency_ms"] for f in sender.flushes] == [312.4, 312.4, 12.4]
+    assert not (tmp_path / DEMO_FAULT_FILE).exists()

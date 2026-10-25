@@ -213,7 +213,9 @@ def run(config: Config, *, stop: threading.Event | None = None, clock=time.monot
             summary.latest = reading
             for line in summary.lines():
                 log.info(line)
-            poller.poll(device_list)  # after the send; may take a few seconds per fix
+            # After the send; may take a few seconds per fix.
+            if poller.poll(device_list):
+                demo.clear_by_fix()
 
             skipped = ticker.advance()
             if skipped:
