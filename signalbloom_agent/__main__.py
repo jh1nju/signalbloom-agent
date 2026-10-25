@@ -1,11 +1,15 @@
 """Entry point: python -m signalbloom_agent"""
 
 import argparse
+import dataclasses
 import json
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from .agent import run, setup_logging
+from .app import (CONFIG_NAME, app_dir, ask_setup_code, create_config, is_frozen,
+                  pause_before_exit)
 from .collectors import CollectorError
 from .collectors.bandwidth import measure_download_mbps
 from .collectors.devices import DeviceScanner
@@ -13,7 +17,7 @@ from .collectors.gateway import find_default_gateway
 from .collectors.ping import ping
 from .collectors.uptime import internet_up
 from .config import DEFAULT_PATH, Config, ConfigError, load_config
-from .register import RegistrationError, ensure_registered
+from .register import NEW_CODE_MESSAGE, RegistrationError, ensure_registered
 from .sender import AuthError
 
 
@@ -57,7 +61,40 @@ def collect_once(config: Config) -> int:
     return 0
 
 
+def config_path() -> Path | str:
+    """config.yaml next to the exe when frozen, else in the current directory."""
+    return app_dir() / CONFIG_NAME if is_frozen() else DEFAULT_PATH
+
+
+def load(path: Path | str) -> Config:
+    """load_config, plus (when frozen) a relative data_dir is put next to the exe."""
+    config = load_config(path)
+    if is_frozen() and not config.data_dir.is_absolute():
+        config = dataclasses.replace(config, data_dir=app_dir() / config.data_dir)
+    return config
+
+
+def first_run_setup(path: Path) -> bool:
+    """Exe only: ask for the setup code and create config.yaml. False if cancelled."""
+    print("Welcome to SignalBloom. This computer isn't set up yet.")
+    print("Get a setup code from Account & Settings in the SignalBloom dashboard.")
+    try:
+        code = ask_setup_code()
+    except (EOFError, KeyboardInterrupt):
+        print("\nSetup cancelled.")
+        return False
+    create_config(path, code)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
+    code = _main(argv)
+    if code != 0:
+        pause_before_exit()  # exe only: keep the window open to read the error
+    return code
+
+
+def _main(argv: list[str] | None) -> int:
     parser = argparse.ArgumentParser(
         prog="signalbloom_agent",
         description="SignalBloom local agent: sends network readings to the SignalBloom cloud.",
@@ -73,21 +110,42 @@ def main(argv: list[str] | None = None) -> int:
         help="measure once, print the reading and exit (nothing is sent)",
     )
     args = parser.parse_args(argv)
+    path = config_path()
 
     if args.collect_once:
         try:
-            config = load_config(DEFAULT_PATH)
+            config = load(path)
         except ConfigError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         return collect_once(config)
 
+    created = False
+    if is_frozen() and not Path(path).is_file():
+        if not first_run_setup(Path(path)):
+            return 1
+        created = True
+
     try:
-        config = load_config(DEFAULT_PATH)
+        config = load(path)
         already_registered = bool(config.site_token)
-        config = ensure_registered(config, DEFAULT_PATH)
-    except (ConfigError, RegistrationError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        config = ensure_registered(config, path)
+    except (ConfigError, RegistrationError, KeyboardInterrupt) as exc:
+        if created:
+            # Start fresh next time, so a bad code isn't retried forever.
+            Path(path).unlink(missing_ok=True)
+        if isinstance(exc, KeyboardInterrupt):
+            print("Stopped.")
+            return 0
+        if created and str(exc) == NEW_CODE_MESSAGE:
+            print(
+                "Error: That setup code didn't work. It may be mistyped, already used, "
+                "or expired. Get a new setup code from Account & Settings in the "
+                "SignalBloom dashboard, then run SignalBloom-Agent.exe again.",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     if already_registered:

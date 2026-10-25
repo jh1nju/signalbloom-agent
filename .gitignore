@@ -12,3 +12,8 @@ data/
 
 # Fake cloud state (holds test site tokens)
 tools/.fake_cloud_state.json
+
+# Windows exe build output (build_exe.ps1)
+build/
+dist/
+*.spec

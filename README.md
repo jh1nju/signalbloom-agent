@@ -61,6 +61,28 @@ With no flags the agent runs until Ctrl+C:
 
 On first run the agent registers with `setup_code`, saves `site_id` and `site_token` into `config.yaml`, clears `setup_code`, and limits the file to your user account. Later runs skip registration.
 
+### Windows program (no Python needed)
+
+To give the agent to someone who doesn't have Python, build a single Windows program:
+
+```powershell
+.\build_exe.ps1        # needs the .venv from Install; output: dist\SignalBloom-Agent.exe
+```
+
+The build contains only the agent's code and `config.example.yaml` (as the template). Your `config.yaml`, `data\` and site token are never included, and the script stops with an error if it finds any of them inside the exe.
+
+To use it:
+
+1. Put `SignalBloom-Agent.exe` in its own folder, for example `C:\SignalBloom`.
+2. Double-click it. On the first run it asks for the setup code from Account & Settings. Type it and press Enter. It registers with the SignalBloom cloud (`https://signalbloom.ai.studio`) and starts sending readings.
+3. Leave the window open. It shows one line per send. Press Ctrl+C to stop.
+
+Later runs skip the setup code and start straight away. If the code is wrong, used or expired, the window says so and waits for Enter. Get a new code and run the program again.
+
+Everything the program creates is in the folder next to the exe: `config.yaml` (holds the site token, so keep it private) and `data\` (log, buffered readings, fix results). To register again, delete `config.yaml`. To turn on the demo fault, create an empty file named `demo_fault` in that `data\` folder, or run `SignalBloom-Agent.exe --demo-fault` from a terminal.
+
+Windows may warn that the program is from an unknown publisher, because it isn't signed. Click **More info**, then **Run anyway**.
+
 ### Test
 
 ```powershell
